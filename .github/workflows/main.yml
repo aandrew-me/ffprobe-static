@@ -1,0 +1,111 @@
+name: Build Static FFprobe
+
+on:
+  workflow_dispatch: # Allows manual triggering
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+
+jobs:
+  build:
+    name: Build ffprobe (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: ffprobe-linux
+            executable_name: ffprobe
+          - os: macos-latest
+            artifact_name: ffprobe-macos
+            executable_name: ffprobe
+          - os: windows-latest
+            artifact_name: ffprobe-win.exe
+            executable_name: ffprobe.exe
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # --- LINUX PREP ---
+      - name: Install Dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm yasm build-essential pkg-config wget
+
+      # --- MACOS PREP ---
+      - name: Install Dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install nasm yasm
+
+      # --- WINDOWS PREP ---
+      - name: Setup MSYS2 (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-yasm
+            git
+
+      # --- CLONE FFMPEG (ALL OS) ---
+      - name: Clone FFmpeg
+        shell: bash
+        run: |
+          # Cloning depth 1 of release/6.1 for stability. Change branch if needed.
+          git clone --depth 1 --branch release/6.1 https://git.ffmpeg.org/ffmpeg.git ffmpeg_src
+
+      # --- BUILD (LINUX & MACOS) ---
+      - name: Configure and Build (Linux/macOS)
+        if: runner.os != 'Windows'
+        working-directory: ffmpeg_src
+        run: |
+          ./configure \
+            --disable-debug \
+            --enable-static \
+            --disable-shared \
+            --disable-ffplay \
+            --disable-ffmpeg \
+            --disable-doc \
+            --enable-gpl \
+            --enable-version3 \
+            --pkg-config-flags="--static" \
+            --extra-ldflags="-static" || cat ffbuild/config.log
+          
+          make -j$(nproc)
+          strip ffprobe
+
+      # --- BUILD (WINDOWS) ---
+      - name: Configure and Build (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: msys2 {0}
+        working-directory: ffmpeg_src
+        run: |
+          ./configure \
+            --disable-debug \
+            --enable-static \
+            --disable-shared \
+            --disable-ffplay \
+            --disable-ffmpeg \
+            --disable-doc \
+            --enable-gpl \
+            --enable-version3 \
+            --pkg-config-flags="--static" \
+            --extra-ldflags="-static"
+          
+          make -j$(nproc)
+          strip ffprobe.exe
+
+      # --- UPLOAD ARTIFACTS ---
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ffmpeg_src/${{ matrix.executable_name }}

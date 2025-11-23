@@ -1,0 +1,1 @@
+Static minimal ffprobe build
